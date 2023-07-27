@@ -2,12 +2,17 @@ package main
 
 import (
 	//"fmt"
-	"github.com/go-chi/chi"
-	"github.com/go-chi/cors"
-	"github.com/joho/godotenv"
+
+	"fmt"
 	"log"
 	"net/http"
 	"os"
+
+	"github.com/go-chi/chi"
+	"github.com/go-chi/cors"
+	"github.com/joho/godotenv"
+	"gorm.io/driver/mysql"
+	"gorm.io/gorm"
 )
 
 func main() {
@@ -16,7 +21,23 @@ func main() {
 	if portString == "" {
 		log.Fatal("PORT environment variable not set")
 	}
-	//main router, think of a router like resourse in aws api gateway
+	dsn := fmt.Sprintf("%s&parseTime=True", os.Getenv("DSN"))
+	db, dbErr := gorm.Open(mysql.Open(dsn), &gorm.Config{
+		DisableForeignKeyConstraintWhenMigrating: true,
+	})
+	if dbErr != nil {
+		log.Fatalf("failed to connect to PlanetScale: %v", dbErr)
+	}
+	log.Println("Successfully connected to PlanetScale!")
+
+	migrateErr := db.AutoMigrate(&Users{}, &Feeds{})
+
+	if migrateErr != nil {
+		log.Fatalf("failed to migrate: %v", migrateErr)
+	}
+	handler := newHandler(db)
+
+	//main router, think of a router like resource in aws api gateway
 	router := chi.NewRouter()
 	router.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"https://*", "http://*"},
@@ -32,7 +53,10 @@ func main() {
 	//using .Get (over .HandleFunc) scopes the route to only GET requests
 	v1Router.Get("/healthz", handlerReadiness)
 	v1Router.Get("/error", handlerErr)
-
+	v1Router.Post("/createUser", handler.handlerCreateUser)
+	v1Router.Post("/createFeed", handler.handleCreateFeed)
+	v1Router.Post("/getFeed", handler.handleReadFeed)
+	v1Router.Post("/getUser", handler.handleGetUser)
 	//nesting the router under the /v1 path
 	//This means that the final route for the /ready path is: /v1/healthz
 	router.Mount("/v1", v1Router)
@@ -45,4 +69,8 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+}
+
+func newHandler(db *gorm.DB) *Handler {
+	return &Handler{db}
 }
